@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compensación de Inventario</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f0f2f7;color:#1a1a2e;font-size:13px}
+header{background:#1e3a5f;color:#fff;padding:12px 22px;display:flex;align-items:center;gap:12px}
+header h1{font-size:15px;font-weight:700}
+header span{font-size:11px;opacity:.65}
+.upload-zone{background:#fff;border:2px dashed #c5cfe0;border-radius:10px;padding:36px;text-align:center;cursor:pointer;margin:20px 22px;transition:.2s}
+.upload-zone:hover,.upload-zone.drag{border-color:#1e3a5f;background:#f0f4ff}
+.upload-zone svg{margin-bottom:10px}
+.upload-zone b{color:#1e3a5f;font-size:14px;display:block}
+.upload-zone p{color:#888;font-size:12px;margin-top:6px}
+#fileInput{display:none}
+.main{padding:0 22px 28px}
+.tabs{display:flex;gap:4px;border-bottom:2px solid #d8dff0;margin-bottom:16px;flex-wrap:wrap;padding-top:14px}
+.tab{padding:7px 15px;cursor:pointer;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;color:#555;font-size:12px;font-weight:600;background:#fff;transition:.15s}
+.tab.active{background:#1e3a5f;color:#fff}
+.tab:hover:not(.active){background:#e4eaf7}
+.tab-con{border-color:#0a7c6e!important;color:#0a7c6e}
+.tab-con.active{background:#0a7c6e!important;color:#fff!important}
+.tab-sin{border-color:#c0392b!important;color:#c0392b}
+.tab-sin.active{background:#c0392b!important;color:#fff!important}
+.tab-content{display:none}.tab-content.active{display:block}
+.cards{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.card{background:#fff;border-radius:8px;padding:12px 16px;flex:1;min-width:120px;border-top:3px solid #ddd}
+.card.cr{border-color:#e63946}.card.cb{border-color:#1a6fc4}.card.ct{border-color:#0a7c6e}.card.ca{border-color:#e07b00}
+.card lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px;display:block}
+.card .v{font-size:17px;font-weight:800;margin-top:2px}
+.card.cr .v{color:#e63946}.card.cb .v{color:#1a6fc4}.card.ct .v{color:#0a7c6e}.card.ca .v{color:#e07b00}
+.card small{font-size:10px;color:#aaa}
+.fbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.fbar label{font-size:11px;color:#666}
+select,input[type=text]{padding:5px 9px;border:1px solid #d0d8ea;border-radius:5px;font-size:12px;background:#fff}
+/* NIVEL 0: Familia (DESC4) */
+.n0{background:#fff;border-radius:8px;margin-bottom:12px;border:1px solid #c8d3ea;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.n0-hdr{padding:11px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;background:#e8edf8;border-bottom:2px solid #c0ceea}
+.n0-hdr:hover{background:#dde4f5}
+/* NIVEL 1: RF1 */
+.n1{margin:10px 12px;border-radius:6px;border:1px solid #dde5f5;overflow:hidden}
+.n1-hdr{padding:9px 14px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;background:#f2f5fc;border-bottom:1px solid #dde5f5}
+.n1-hdr:hover{background:#e8edf8}
+/* NIVEL 2: RF2 */
+.n2{margin:8px 12px;border-radius:5px;border:1px solid #e8edf5;overflow:hidden}
+.n2-hdr{padding:7px 12px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;background:#f8f9fd;border-bottom:1px solid #e8edf5}
+.n2-hdr:hover{background:#edf1fb}
+/* TABLE */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:11.5px;min-width:900px}
+thead tr th{padding:7px 9px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;white-space:nowrap;border-bottom:2px solid #dde3ef}
+th.hd{background:#2a2a2a;color:#fff}
+th.hb{background:#1a6fc4;color:#fff;text-align:right}
+th.ho{background:#d96c00;color:#fff;text-align:right}
+th.ho2{background:#f0962a;color:#fff;text-align:right}
+th.ht{background:#0a7c6e;color:#fff;text-align:right}
+th.hr{background:#c0392b;color:#fff;text-align:right}
+tbody tr{border-bottom:1px solid #eee}
+tbody tr:hover{filter:brightness(.97)}
+td{padding:6px 9px;vertical-align:middle}
+td.r{text-align:right}
+tr.rf{background:#fef0f0}
+tr.rs{background:#edfaf2}
+tr.rn{background:#fafbfd}
+tr.sub0{background:#c8d3ea;font-weight:700;font-size:11px;border-top:2px solid #9aaacf}
+tr.sub1{background:#d8e0f0;font-weight:700;font-size:11px;border-top:2px solid #aab8d9}
+tr.sub2{background:#e4eaf7;font-weight:700;font-size:11px;border-top:2px solid #c0ccec}
+.cn{color:#c0392b;font-weight:700}
+.cp{color:#1a7a3c;font-weight:700}
+.cz{color:#999}
+.cb2{color:#1a6fc4;font-weight:700}
+.cr2{color:#c0392b;font-weight:700}
+.cg{color:#aaa}
+.tf{color:#c0392b;font-weight:700;font-size:10px}
+.ts{color:#1a6fc4;font-weight:700;font-size:10px}
+.badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;display:inline-block;white-space:nowrap}
+.bf{background:#fde8e8;color:#c0392b}
+.bs{background:#e4f8ec;color:#1a7a3c}
+.bb{background:#e8eeff;color:#1e3a5f}
+.bp{background:#fff3e0;color:#c05800}
+.ch{font-size:9px;color:#999;transition:.2s;display:inline-block;min-width:12px}
+/* collapse logic por nivel */
+.n0.col > .n0-hdr .ch{transform:rotate(-90deg)}
+.n0.col > .n0-body{display:none}
+.n1.col > .n1-hdr .ch{transform:rotate(-90deg)}
+.n1.col > .n1-body{display:none}
+.n2.col > .n2-hdr .ch{transform:rotate(-90deg)}
+.n2.col > .n2-body{display:none}
+.actions{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap;padding-top:14px}
+.btn{padding:7px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;transition:.15s}
+.bp2{background:#1e3a5f;color:#fff}.bp2:hover{background:#162d4a}
+.bo{background:#fff;color:#1e3a5f;border:1px solid #1e3a5f}.bo:hover{background:#f0f4ff}
+.fn{font-size:11px;color:#999}
+.sn{color:#c0392b;font-weight:700}
+.sp{color:#1a7a3c;font-weight:700}
+.sz{color:#1e3a5f;font-weight:700}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:1px 7px;border-radius:4px;white-space:nowrap}
+.p-desc4{background:#1e3a5f;color:#fff;font-size:12px;letter-spacing:.5px}
+.p-rf1{background:#e8edf8;color:#1e3a5f;border:1px solid #c0ceea}
+.p-rf2{background:#1e3a5f22;color:#1e3a5f;font-size:10px}
+.p-med{background:#fef3e0;color:#7d5000;border:1px solid #f4d98a;font-size:10px}
+.stat{font-size:10px;color:#888;white-space:nowrap}
+.statv{font-weight:700}
+</style>
+</head>
+<body>
+<header>
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+  <div>
+    <h1>Compensación de Inventario — 4 Niveles</h1>
+    <span>Centro → Familia DESC4 → RF1 (+ Medida) → RF2 (2 letras código) → Renglón</span>
+  </div>
+</header>
+
+<div id="uploadArea">
+  <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#1e3a5f" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
+    <b>Cargar archivo Excel</b>
+    <p>Arrastra tu .xlsx o haz clic para seleccionar</p>
+    <p style="margin-top:5px;font-size:11px;color:#bbb">Columnas: Centro · Codigo de Material · Descripcion del Material · Medidas · Rf1 · Cantidad Contada · Existencia Teorica · Diferencia en Cantidad · Diferencia en Valores · RF2 (opcional)</p>
+  </div>
+  <input type="file" id="fileInput" accept=".xlsx,.xls">
+</div>
+
+<div id="appArea" style="display:none" class="main">
+  <div class="actions">
+    <button class="btn bp2" onclick="exportarExcel()">⬇ Descargar Excel con formato</button>
+    <button class="btn bo" onclick="reiniciar()">↺ Otro archivo</button>
+    <span class="fn" id="fnLabel"></span>
+  </div>
+  <div id="cTabs" class="tabs"></div>
+  <div id="cContents"></div>
+</div>
+
+<script>
+let gData=[],centros=[],pData={};
+
+const dz=document.getElementById('dropZone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');loadFile(e.dataTransfer.files[0])});
+document.getElementById('fileInput').addEventListener('change',e=>loadFile(e.target.files[0]));
+
+function loadFile(file){
+  if(!file)return;
+  document.getElementById('fnLabel').textContent=file.name;
+  const rd=new FileReader();
+  rd.onload=e=>{
+    const wb=XLSX.read(e.target.result,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const raw=XLSX.utils.sheet_to_json(ws,{defval:null});
+    gData=raw.map(r=>{const n={};for(const k in r)n[k.trim()]=r[k];return n}).filter(r=>r['Centro']!=null);
+    buildAndRender();
+  };
+  rd.readAsArrayBuffer(file);
+}
+
+// ── HELPERS ──
+const fmtMoney=n=>'$'+Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+const fmtQ=n=>n%1===0?String(n):n.toFixed(3);
+
+function getDesc4(row){
+  const desc=String(row['Descripcion del Material']||'').trim();
+  const first=desc.split(/\s+/)[0]||'';
+  return first.substring(0,4).toUpperCase();
+}
+function getDescWord(row){
+  const desc=String(row['Descripcion del Material']||'').trim();
+  return (desc.split(/\s+/)[0]||'').toUpperCase();
+}
+function getRF2(row){
+  const col=row['RF2']||row['Rf2']||row['rf2'];
+  if(col!=null&&col!=='') return String(col).trim().toUpperCase().substring(0,2);
+  return String(row['Codigo de Material']||'??').trim().toUpperCase().substring(0,2);
+}
+
+// ── COMPENSATION ENGINE ──
+function enrichRows(rows){
+  return rows.map(r=>{
+    const dq=Number(r['Diferencia en Cantidad']||0);
+    const dv=Number(r['Diferencia en Valores']||0);
+    return{...r,_dq:dq,_dv:dv,_vu:dq!==0?Math.abs(dv/dq):0};
+  });
+}
+
+function applyCoverage(rows){
+  const falt=rows.filter(r=>r._dq<0);
+  const sobr=rows.filter(r=>r._dq>0);
+  const neut=rows.filter(r=>r._dq===0);
+  const totalSQ=sobr.reduce((s,r)=>s+r._dq,0);
+  const totalFQ=falt.reduce((s,r)=>s+Math.abs(r._dq),0);
+
+  let avS=totalSQ;
+  const faltC=falt.map(r=>{
+    const aq=Math.abs(r._dq);
+    const cc=Math.min(aq,Math.max(0,avS));
+    avS=Math.max(0,avS-aq);
+    const cnc=aq-cc;
+    return{...r,cantCub:cc,cantNoCub:cnc,impCub:cc*r._vu,impNoCub:cnc*r._vu};
+  });
+  let avF=totalFQ;
+  const sobrC=sobr.map(r=>{
+    const q=r._dq;
+    const cc=Math.min(q,Math.max(0,avF));
+    avF=Math.max(0,avF-q);
+    const cnc=q-cc;
+    return{...r,cantCub:cc,cantNoCub:cnc,impCub:cc*r._vu,impNoCub:cnc*r._vu};
+  });
+  const neutC=neut.map(r=>({...r,cantCub:0,cantNoCub:0,impCub:0,impNoCub:0}));
+
+  const totFV=falt.reduce((s,r)=>s+Math.abs(r._dv),0);
+  const totSV=sobr.reduce((s,r)=>s+r._dv,0);
+  const impCub=faltC.reduce((s,r)=>s+r.impCub,0);
+  const netQ=totalSQ-totalFQ;
+  const saldoV=totSV-totFV;
+  let estado;
+  if(!falt.length&&!sobr.length) estado='balanceado';
+  else if(!sobr.length) estado='faltante';
+  else if(!falt.length) estado='sobrante';
+  else if(Math.abs(netQ)<0.001) estado='balanceado';
+  else estado='parcial';
+
+  return{faltC,sobrC,neutC,totFV,totSV,impCub,netQ,saldoV,estado,totalFQ,totalSQ};
+}
+
+// ── BUILD HIERARCHY ──
+// Centro → desc4 → rf1+medida → rf2 → rows
+function processCentro(rows){
+  const enriched=enrichRows(rows);
+
+  // Level 0: DESC4 (familia)
+  const d4map={};
+  enriched.forEach(r=>{
+    const d4=getDesc4(r);
+    if(!d4map[d4])d4map[d4]=[];
+    d4map[d4].push(r);
+  });
+
+  const familias=Object.entries(d4map).map(([desc4,drows])=>{
+    // Level 1: RF1 + Medida
+    const rf1map={};
+    drows.forEach(r=>{
+      const rf1=(r['Rf1']||'SIN_RF1').toString().trim();
+      const med=r['Medidas']!=null&&r['Medidas']!==''?String(r['Medidas']).trim():null;
+      const k=rf1+'||'+(med||'');
+      if(!rf1map[k])rf1map[k]={rf1,med,rows:[]};
+      rf1map[k].rows.push(r);
+    });
+
+    const rf1groups=Object.values(rf1map).map(g=>{
+      // Level 2: RF2
+      const rf2map={};
+      g.rows.forEach(r=>{
+        const rf2=getRF2(r);
+        if(!rf2map[rf2])rf2map[rf2]=[];
+        rf2map[rf2].push(r);
+      });
+
+      const rf2groups=Object.entries(rf2map).map(([rf2,rws])=>{
+        const cov=applyCoverage(rws);
+        return{rf2,rows:rws,...cov};
+      });
+      rf2groups.sort((a,b)=>ord(a.estado)-ord(b.estado)||a.saldoV-b.saldoV);
+
+      // RF1 level aggregate
+      const rf1cov=applyCoverage(g.rows);
+      const l1impCub=rf2groups.reduce((s,g2)=>s+g2.impCub,0);
+      return{rf1:g.rf1,med:g.med,rf2groups,...rf1cov,l1impCub};
+    });
+    rf1groups.sort((a,b)=>ord(a.estado)-ord(b.estado)||a.saldoV-b.saldoV);
+
+    // Familia level aggregate
+    const famcov=applyCoverage(drows);
+    const famImpCub=rf1groups.reduce((s,g1)=>s+g1.l1impCub,0);
+    // collect unique RF1 words for display
+    const rf1words=[...new Set(drows.map(r=>(r['Rf1']||'').toString().trim()))].filter(Boolean);
+    return{desc4,rf1words,rf1groups,...famcov,famImpCub};
+  });
+
+  familias.sort((a,b)=>ord(a.estado)-ord(b.estado)||a.saldoV-b.saldoV);
+  return familias;
+}
+
+const ord=e=>({faltante:0,parcial:1,balanceado:2,sobrante:3}[e]||2);
+
+// ── RENDER UI ──
+function buildAndRender(){
+  centros=[...new Set(gData.map(r=>r['Centro']))].filter(Boolean).sort();
+  pData={};
+  centros.forEach(c=>{pData[c]=processCentro(gData.filter(r=>r['Centro']===c))});
+  const te=document.getElementById('cTabs'),ce=document.getElementById('cContents');
+  te.innerHTML='';ce.innerHTML='';
+
+  // ── Pestañas por centro ──
+  centros.forEach((c,i)=>{
+    const tab=document.createElement('div');
+    tab.className='tab';
+    tab.dataset.centro=c;
+    const nF=pData[c].filter(g=>g.estado==='faltante'||g.estado==='parcial').length;
+    tab.innerHTML=`${c} <span style="font-size:10px;opacity:.75">${nF>0?`▼${nF}`:'✓'}</span>`;
+    tab.onclick=()=>switchTab(c);
+    te.appendChild(tab);
+    const div=document.createElement('div');
+    div.className='tab-content';
+    div.id='tc-'+c;
+    div.innerHTML=renderCentro(c);
+    ce.appendChild(div);
+  });
+
+  // ── Separador visual ──
+  const sep=document.createElement('div');
+  sep.style.cssText='width:2px;background:#d0d8ee;margin:4px 2px;border-radius:2px';
+  te.appendChild(sep);
+
+  // ── Pestaña: Con Compensación ──
+  const tabCon=document.createElement('div');
+  tabCon.className='tab tab-global tab-con';
+  tabCon.dataset.centro='__CON__';
+  tabCon.innerHTML='✅ Con Compensación';
+  tabCon.onclick=()=>switchTab('__CON__');
+  te.appendChild(tabCon);
+  const divCon=document.createElement('div');
+  divCon.className='tab-content';
+  divCon.id='tc-__CON__';
+  divCon.innerHTML=renderGlobal('con');
+  ce.appendChild(divCon);
+
+  // ── Pestaña: Sin Compensación ──
+  const tabSin=document.createElement('div');
+  tabSin.className='tab tab-global tab-sin';
+  tabSin.dataset.centro='__SIN__';
+  tabSin.innerHTML='❌ Sin Compensación';
+  tabSin.onclick=()=>switchTab('__SIN__');
+  te.appendChild(tabSin);
+  const divSin=document.createElement('div');
+  divSin.className='tab-content';
+  divSin.id='tc-__SIN__';
+  divSin.innerHTML=renderGlobal('sin');
+  ce.appendChild(divSin);
+
+  // Activar primera pestaña
+  te.querySelector('.tab').classList.add('active');
+  ce.querySelector('.tab-content').classList.add('active');
+
+  document.getElementById('uploadArea').style.display='none';
+  document.getElementById('appArea').style.display='block';
+}
+
+function switchTab(c){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(d=>d.classList.remove('active'));
+  document.querySelector(`.tab[data-centro="${c}"]`).classList.add('active');
+  document.getElementById('tc-'+c).classList.add('active');
+}
+
+// ── Determinar si un renglón tuvo compensación ──
+// Un renglón "con compensación" es aquel cuya cantCub > 0
+// Un renglón "sin compensación" es aquel cuyo cantNoCub == absQ (nada cubierto) o es neutro sin grupo compensado
+function tieneCompensacion(r){
+  return r.cantCub>0.001;
+}
+
+// ── Recolectar TODOS los renglones procesados de todos los centros ──
+function getAllRows(filtro){
+  // filtro: 'con' | 'sin'
+  const result=[]; // {centro, desc4, rf1words, rf1, med, rf2, row}
+  centros.forEach(c=>{
+    pData[c].forEach(fam=>{
+      fam.rf1groups.forEach(g1=>{
+        g1.rf2groups.forEach(g2=>{
+          const allR=[...g2.faltC,...g2.sobrC,...g2.neutC];
+          allR.forEach(r=>{
+            const tc=tieneCompensacion(r);
+            if(filtro==='con'&&tc) result.push({centro:c,fam,g1,g2,r});
+            if(filtro==='sin'&&!tc&&r._dq!==0) result.push({centro:c,fam,g1,g2,r});
+          });
+        });
+      });
+    });
+  });
+  return result;
+}
+
+// ── Renderizar vista global agrupada ──
+function renderGlobal(filtro){
+  const allRows=getAllRows(filtro);
+  const esCon=filtro==='con';
+  const color=esCon?'#0a7c6e':'#c0392b';
+  const titulo=esCon?'Renglones CON compensación (cantCub > 0)':'Renglones SIN compensación (cantNoCub = total)';
+
+  if(!allRows.length) return`<div style="padding:40px;text-align:center;color:#aaa;font-size:14px">${esCon?'No hay renglones compensados':'No hay renglones sin compensar'}</div>`;
+
+  // Resumen totales
+  const totFalt=allRows.filter(x=>x.r._dq<0).reduce((s,x)=>s+Math.abs(x.r._dv),0);
+  const totSobr=allRows.filter(x=>x.r._dq>0).reduce((s,x)=>s+x.r._dv,0);
+  const totCub=allRows.reduce((s,x)=>s+x.r.impCub,0);
+  const totNoCub=allRows.reduce((s,x)=>s+x.r.impNoCub,0);
+
+  let h=`<div style="padding:10px 0 6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <span style="font-size:13px;font-weight:800;color:${color}">${titulo}</span>
+    <span style="font-size:11px;color:#888">${allRows.length} renglones · ${[...new Set(allRows.map(x=>x.centro))].length} centros</span>
+  </div>
+  <div class="cards">
+    <div class="card cr"><lbl>Faltante</lbl><div class="v">${fmtMoney(totFalt)}</div><small>${allRows.filter(x=>x.r._dq<0).length} renglones</small></div>
+    <div class="card cb"><lbl>Sobrante</lbl><div class="v">${fmtMoney(totSobr)}</div><small>${allRows.filter(x=>x.r._dq>0).length} renglones</small></div>
+    ${esCon?`<div class="card ct"><lbl>Imp. Cubierto</lbl><div class="v">${fmtMoney(totCub)}</div><small>Total compensado</small></div>`:''}
+    ${!esCon?`<div class="card ca"><lbl>Imp. No Cubierto</lbl><div class="v">${fmtMoney(totNoCub)}</div><small>Sin compensar</small></div>`:''}
+  </div>`;
+
+  // Agrupar por Centro → DESC4 → RF1 → RF2 (misma jerarquía visual)
+  // Construir estructura a partir de allRows
+  const byKey={};
+  allRows.forEach(x=>{
+    const k0=x.centro;
+    const k1=x.fam.desc4;
+    const k2=x.g1.rf1+'||'+(x.g1.med||'');
+    const k3=x.g2.rf2;
+    if(!byKey[k0])byKey[k0]={label:k0,children:{}};
+    if(!byKey[k0].children[k1])byKey[k0].children[k1]={fam:x.fam,children:{}};
+    if(!byKey[k0].children[k1].children[k2])byKey[k0].children[k1].children[k2]={g1:x.g1,children:{}};
+    if(!byKey[k0].children[k1].children[k2].children[k3])byKey[k0].children[k1].children[k2].children[k3]={g2:x.g2,rows:[]};
+    byKey[k0].children[k1].children[k2].children[k3].rows.push(x.r);
+  });
+
+  const uid=(()=>{let n=0;return()=>'gv'+(n++)})();
+
+  Object.entries(byKey).forEach(([centro,c0])=>{
+    h+=`<div style="background:#1e3a5f;color:#fff;padding:8px 14px;border-radius:6px 6px 0 0;font-weight:800;font-size:13px;margin-top:14px">📍 CENTRO: ${centro}</div>`;
+    Object.entries(c0.children).forEach(([d4,c1])=>{
+      const id0=uid();
+      const fam=c1.fam;
+      h+=`<div class="n0" id="${id0}" style="border-radius:0;margin-bottom:2px">
+        <div class="n0-hdr" onclick="tog('${id0}')">
+          <span class="ch">▼</span>
+          <span class="pill p-desc4">${d4}</span>
+          <span style="font-size:11px;color:#2a4a7f;font-weight:600;flex:1">${fam.rf1words.join(' · ')}</span>
+        </div>
+        <div class="n0-body">`;
+      Object.entries(c1.children).forEach(([k2,c2])=>{
+        const id1=uid();
+        const g1=c2.g1;
+        h+=`<div class="n1" id="${id1}">
+          <div class="n1-hdr" onclick="tog('${id1}')">
+            <span class="ch">▼</span>
+            <span class="pill p-rf1">RF1: ${g1.rf1}</span>
+            ${g1.med?`<span class="pill p-med">📐 ${g1.med}</span>`:''}
+            <span class="stat" style="flex:1;margin-left:6px">${Object.keys(c2.children).length} RF2</span>
+          </div>
+          <div class="n1-body">`;
+        Object.entries(c2.children).forEach(([rf2,c3])=>{
+          const id2=uid();
+          const g2=c3.g2;
+          h+=`<div class="n2" id="${id2}">
+            <div class="n2-hdr" onclick="tog('${id2}')">
+              <span class="ch">▼</span>
+              <span class="pill p-rf2">RF2: ${rf2}</span>
+              <span class="stat" style="flex:1;margin-left:6px">${c3.rows.length} renglón${c3.rows.length!==1?'es':''}</span>
+              ${eBadge(g2.estado)}
+            </div>
+            <div class="n2-body">
+              <div class="tbl-wrap">
+              <table>
+                <thead><tr>
+                  <th class="hd">Centro</th>
+                  <th class="hd" style="min-width:110px">Código</th>
+                  <th class="hd" style="min-width:170px">Descripción</th>
+                  <th class="hd">Medida</th>
+                  <th class="hd">RF2</th>
+                  <th class="hd">DESC4</th>
+                  <th class="hd">Tipo</th>
+                  <th class="hb">Dif. Cant.</th>
+                  <th class="ho">Dif. Importe</th>
+                  <th class="ho2">Val. Unit.</th>
+                  <th class="ht">Cant. Cub.</th>
+                  <th class="hr">Cant. NoCub.</th>
+                  <th class="ht">Imp. Cub.</th>
+                  <th class="hr">Imp. NoCub.</th>
+                </tr></thead>
+                <tbody>
+                  ${c3.rows.map(r=>renderRowCentro(r,centro)).join('')}
+                </tbody>
+              </table>
+              </div>
+            </div>
+          </div>`;
+        });
+        h+=`</div></div>`;
+      });
+      h+=`</div></div>`;
+    });
+  });
+
+  h+=`<div style="margin-bottom:16px"></div>`;
+  return h;
+}
+
+function renderRowCentro(r,centro){
+  const isF=r._dq<0,isS=r._dq>0;
+  const cls=isF?'rf':isS?'rs':'rn';
+  const dc=isF?'cn':isS?'cp':'cz';
+  return`<tr class="${cls}">
+    <td style="font-size:10px;color:#888">${centro}</td>
+    <td><b>${r['Codigo de Material']||''}</b></td>
+    <td style="font-size:11px">${r['Descripcion del Material']||''}</td>
+    <td class="r cg">${r['Medidas']||'—'}</td>
+    <td style="text-align:center"><span style="background:#1e3a5f22;color:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${getRF2(r)}</span></td>
+    <td style="text-align:center"><span style="background:#1e3a5f;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${getDesc4(r)}</span></td>
+    <td class="${isF?'tf':isS?'ts':'cg'}">${isF?'FALTANTE':isS?'SOBRANTE':'—'}</td>
+    <td class="${dc} r">${isF?'':'+'}${fmtQ(r._dq)}</td>
+    <td class="${dc} r">${r._dv<0?'-$':'$'}${Math.abs(r._dv).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td class="r" style="color:#555">$${r._vu.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td class="r cb2">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
+    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
+    <td class="r cb2">${r.impCub>0.005?'$'+r.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'—'}</td>
+    <td class="r ${r.impNoCub>0.005?'cr2':'cg'}">${r.impNoCub>0.005?'$'+r.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'$0.00'}</td>
+  </tr>`;
+}
+
+function eBadge(e){
+  const m={faltante:'bf',sobrante:'bs',balanceado:'bb',parcial:'bp'};
+  const l={faltante:'▼ Faltante',sobrante:'▲ Sobrante',balanceado:'= Balanceado',parcial:'~ Parcial'};
+  return`<span class="badge ${m[e]||'bb'}">${l[e]||e}</span>`;
+}
+function saldoStr(v){
+  if(v<-0.005)return`<span class="sn">Saldo: -${fmtMoney(v)}</span>`;
+  if(v>0.005)return`<span class="sp">Saldo: +${fmtMoney(v)}</span>`;
+  return`<span class="sz">$0.00</span>`;
+}
+
+function renderCentro(c){
+  const gs=pData[c];
+  const tf=gs.reduce((s,g)=>s+g.totFV,0);
+  const ts=gs.reduce((s,g)=>s+g.totSV,0);
+  const tc=gs.reduce((s,g)=>s+g.famImpCub,0);
+  const tr=gs.reduce((s,g)=>s+g.saldoV,0);
+  const nF=gs.filter(g=>g.estado==='faltante').length;
+  const nP=gs.filter(g=>g.estado==='parcial').length;
+  const nB=gs.filter(g=>g.estado==='balanceado').length;
+  const nS=gs.filter(g=>g.estado==='sobrante').length;
+
+  let h=`<div class="cards">
+    <div class="card cr"><lbl>Total Faltante</lbl><div class="v">${fmtMoney(tf)}</div><small>${gs.filter(g=>g.faltC.length).length} familias</small></div>
+    <div class="card cb"><lbl>Total Sobrante</lbl><div class="v">${fmtMoney(ts)}</div><small>${gs.filter(g=>g.sobrC.length).length} familias</small></div>
+    <div class="card ct"><lbl>Imp. Cubierto</lbl><div class="v">${fmtMoney(tc)}</div><small>Compensado multinivel</small></div>
+    <div class="card ca"><lbl>Saldo Neto</lbl><div class="v">${fmtMoney(tr)}</div><small>${tr<0?'Faltante neto':'Sobrante neto'}</small></div>
+  </div>
+  <div class="fbar">
+    <label>Estado:</label>
+    <select onchange="filtrar('${c}',this.value)">
+      <option value="*">Todos (${gs.length})</option>
+      <option value="faltante">Faltante (${nF})</option>
+      <option value="parcial">Parcial (${nP})</option>
+      <option value="balanceado">Balanceado (${nB})</option>
+      <option value="sobrante">Sobrante (${nS})</option>
+    </select>
+    <label>Familia:</label>
+    <input type="text" placeholder="DESC4 o RF1..." oninput="buscar('${c}',this.value)">
+    <button class="btn bo" style="padding:4px 10px;font-size:11px" onclick="expandAll('${c}',true)">+ Todo</button>
+    <button class="btn bo" style="padding:4px 10px;font-size:11px" onclick="expandAll('${c}',false)">− Todo</button>
+  </div>
+  <div id="g-${c}">`;
+
+  gs.forEach((fam,i)=>{h+=renderFamilia(fam,c,i)});
+  h+='</div>';
+  return h;
+}
+
+function renderFamilia(fam,centro,idx){
+  const id=`n0-${centro}-${idx}`;
+  const nRf1=fam.rf1groups.length;
+  const nRows=fam.faltC.length+fam.sobrC.length+fam.neutC.length;
+  const rf1List=fam.rf1words.slice(0,5).join(' · ')+(fam.rf1words.length>5?` +${fam.rf1words.length-5}`:'');
+
+  return`<div class="n0" id="${id}" data-estado="${fam.estado}" data-desc4="${fam.desc4}" data-rf1="${fam.rf1words.join(' ')}">
+  <div class="n0-hdr" onclick="tog('${id}')">
+    <span class="ch">▼</span>
+    <span class="pill p-desc4">${fam.desc4}</span>
+    <span style="font-size:11px;color:#2a4a7f;font-weight:600;flex:1">${rf1List}</span>
+    <span class="stat" style="margin-right:6px">${nRf1} RF1 · ${nRows} renglones</span>
+    ${eBadge(fam.estado)}
+    ${saldoStr(fam.saldoV)}
+    <span style="font-size:10px;color:#0a7c6e;margin-left:6px">Cub: ${fmtMoney(fam.famImpCub)}</span>
+  </div>
+  <div class="n0-body">
+    ${fam.rf1groups.map((g1,j)=>renderRF1(g1,centro,idx,j)).join('')}
+    ${renderSubtotalFam(fam)}
+  </div>
+</div>`;
+}
+
+function renderRF1(g1,centro,fidx,r1idx){
+  const id=`n1-${centro}-${fidx}-${r1idx}`;
+  const nRf2=g1.rf2groups.length;
+  const nRows=g1.faltC.length+g1.sobrC.length+g1.neutC.length;
+
+  return`<div class="n1" id="${id}">
+  <div class="n1-hdr" onclick="tog('${id}')">
+    <span class="ch">▼</span>
+    <span class="pill p-rf1">RF1: ${g1.rf1}</span>
+    ${g1.med?`<span class="pill p-med">📐 ${g1.med}</span>`:''}
+    <span class="stat" style="flex:1;margin-left:6px">${nRf2} RF2 · ${nRows} renglones</span>
+    ${eBadge(g1.estado)}
+    ${saldoStr(g1.saldoV)}
+    <span style="font-size:10px;color:#0a7c6e;margin-left:6px">Cub: ${fmtMoney(g1.l1impCub)}</span>
+  </div>
+  <div class="n1-body">
+    ${g1.rf2groups.map((g2,k)=>renderRF2(g2,centro,fidx,r1idx,k)).join('')}
+    ${renderSubtotalRF1(g1)}
+  </div>
+</div>`;
+}
+
+function renderRF2(g2,centro,fidx,r1idx,r2idx){
+  const id=`n2-${centro}-${fidx}-${r1idx}-${r2idx}`;
+  const nRows=g2.faltC.length+g2.sobrC.length+g2.neutC.length;
+
+  return`<div class="n2" id="${id}">
+  <div class="n2-hdr" onclick="tog('${id}')">
+    <span class="ch">▼</span>
+    <span class="pill p-rf2">RF2: ${g2.rf2}</span>
+    <span class="stat" style="flex:1;margin-left:6px">${nRows} renglón${nRows!==1?'es':''}</span>
+    ${eBadge(g2.estado)}
+    ${saldoStr(g2.saldoV)}
+    <span style="font-size:10px;color:#0a7c6e;margin-left:6px">Cub: ${fmtMoney(g2.impCub)}</span>
+  </div>
+  <div class="n2-body">
+    <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th class="hd" style="min-width:110px">Código</th>
+        <th class="hd" style="min-width:175px">Descripción</th>
+        <th class="hd" style="width:48px">Medida</th>
+        <th class="hd" style="width:38px">RF2</th>
+        <th class="hd" style="width:45px">DESC4</th>
+        <th class="hd" style="width:75px">Tipo</th>
+        <th class="hb" style="width:90px">Dif. Cant.</th>
+        <th class="ho" style="width:105px">Dif. Importe</th>
+        <th class="ho2" style="width:95px">Val. Unit.</th>
+        <th class="ht" style="width:100px">Cant. Cub.</th>
+        <th class="hr" style="width:105px">Cant. NoCub.</th>
+        <th class="ht" style="width:105px">Imp. Cub.</th>
+        <th class="hr" style="width:110px">Imp. NoCub.</th>
+      </tr></thead>
+      <tbody>
+        ${[...g2.faltC,...g2.sobrC,...g2.neutC].map(renderRow).join('')}
+        ${renderSubtotalRF2(g2)}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>`;
+}
+
+function renderRow(r){
+  const isF=r._dq<0,isS=r._dq>0;
+  const cls=isF?'rf':isS?'rs':'rn';
+  const dc=isF?'cn':isS?'cp':'cz';
+  const d4=getDesc4(r);
+  const rf2=getRF2(r);
+  return`<tr class="${cls}">
+    <td><b>${r['Codigo de Material']||''}</b></td>
+    <td style="font-size:11px">${r['Descripcion del Material']||''}</td>
+    <td class="r cg">${r['Medidas']||'—'}</td>
+    <td style="text-align:center"><span style="background:#1e3a5f22;color:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${rf2}</span></td>
+    <td style="text-align:center"><span style="background:#1e3a5f;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${d4}</span></td>
+    <td class="${isF?'tf':isS?'ts':'cg'}">${isF?'FALTANTE':isS?'SOBRANTE':'—'}</td>
+    <td class="${dc} r">${isF?'':'+'}${fmtQ(r._dq)}</td>
+    <td class="${dc} r">${r._dv<0?'-$':'$'}${Math.abs(r._dv).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td class="r" style="color:#555">$${r._vu.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td class="r cb2">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
+    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
+    <td class="r cb2">${r.impCub>0.005?'$'+r.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'—'}</td>
+    <td class="r ${r.impNoCub>0.005?'cr2':'cg'}">${r.impNoCub>0.005?'$'+r.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'$0.00'}</td>
+  </tr>`;
+}
+
+function mkSub(cls,label,cols){
+  return`<tr class="${cls}"><td colspan="6" style="font-size:10px">${label}</td>${cols}</tr>`;
+}
+function subCols(netQ,saldoV,totalFQ,totalSQ,impCub,noCubC,noCubI){
+  const qc=netQ<-0.001?'cn':netQ>0.001?'cp':'cz';
+  const vc=saldoV<-0.001?'cn':saldoV>0.001?'cp':'cz';
+  const cubQ=Math.min(totalFQ,totalSQ);
+  return`
+    <td class="${qc} r">${netQ>0?'+':''}${fmtQ(netQ)}</td>
+    <td class="${vc} r">${saldoV<0?'-$':'$'}${Math.abs(saldoV).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td>—</td>
+    <td class="r cb2">${fmtQ(cubQ)}</td>
+    <td class="r ${noCubC>0.001?'cr2':'cg'}">${fmtQ(noCubC)}</td>
+    <td class="r cb2">$${impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
+    <td class="r ${noCubI>0.005?'cr2':'cg'}">$${noCubI.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>`;
+}
+
+function renderSubtotalRF2(g){
+  const noCubI=g.faltC.reduce((s,r)=>s+r.impNoCub,0)+g.sobrC.reduce((s,r)=>s+r.impNoCub,0);
+  const noCubC=g.faltC.reduce((s,r)=>s+r.cantNoCub,0)+g.sobrC.reduce((s,r)=>s+r.cantNoCub,0);
+  return mkSub('sub2',`Sub RF2: ${g.rf2} · ↑${fmtQ(g.totalSQ)} Sobr / ↓${fmtQ(g.totalFQ)} Falt`,
+    subCols(g.netQ,g.saldoV,g.totalFQ,g.totalSQ,g.impCub,noCubC,noCubI));
+}
+
+function renderSubtotalRF1(g1){
+  const noCubI=g1.rf2groups.reduce((s,g2)=>s+g2.faltC.reduce((a,r)=>a+r.impNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.impNoCub,0),0);
+  const noCubC=g1.rf2groups.reduce((s,g2)=>s+g2.faltC.reduce((a,r)=>a+r.cantNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.cantNoCub,0),0);
+  return`<div style="background:#d4daf0;padding:7px 16px;border-top:2px solid #9aaacf;display:flex;gap:18px;flex-wrap:wrap;font-size:11px;font-weight:700">
+    <span style="color:#1e3a5f">TOTAL RF1: ${g1.rf1}${g1.med?' · '+g1.med:''}</span>
+    <span class="${g1.netQ<0?'cn':g1.netQ>0?'cp':'cz'}">Dif. Cant: ${g1.netQ>0?'+':''}${fmtQ(g1.netQ)}</span>
+    <span class="${g1.saldoV<0?'cn':g1.saldoV>0?'cp':'cz'}">Saldo: ${g1.saldoV<0?'-$':'$'}${Math.abs(g1.saldoV).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span style="color:#0a7c6e">Cubierto: $${g1.l1impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span class="${noCubI>0.005?'cn':'cg'}">No Cubierto: $${noCubI.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+  </div>`;
+}
+
+function renderSubtotalFam(fam){
+  const noCubI=fam.rf1groups.reduce((s,g1)=>s+g1.rf2groups.reduce((s2,g2)=>s2+g2.faltC.reduce((a,r)=>a+r.impNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.impNoCub,0),0),0);
+  return`<div style="background:#b8c4de;padding:9px 16px;border-top:2px solid #8a9ec0;display:flex;gap:18px;flex-wrap:wrap;font-size:12px;font-weight:800">
+    <span style="color:#1e3a5f">FAMILIA: ${fam.desc4} (${fam.rf1words.join(', ')})</span>
+    <span class="${fam.saldoV<0?'cn':fam.saldoV>0?'cp':'cz'}">Saldo: ${fam.saldoV<0?'-$':'$'}${Math.abs(fam.saldoV).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span style="color:#0a7c6e">Cubierto familia: $${fam.famImpCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span class="${noCubI>0.005?'cn':'cg'}">No Cubierto: $${noCubI.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+  </div>`;
+}
+
+// ── CONTROLS ──
+function tog(id){
+  const el=document.getElementById(id);
+  // detect level by prefix
+  const lvl=id.startsWith('n0')?'n0':id.startsWith('n1')?'n1':'n2';
+  el.classList.toggle('col');
+}
+function filtrar(c,val){
+  document.querySelectorAll(`#g-${c} .n0`).forEach(el=>{
+    el.style.display=(val==='*'||el.dataset.estado===val)?'':'none';
+  });
+}
+function buscar(c,val){
+  const v=val.trim().toLowerCase();
+  document.querySelectorAll(`#g-${c} .n0`).forEach(el=>{
+    const match=!v||el.dataset.desc4.toLowerCase().includes(v)||el.dataset.rf1.toLowerCase().includes(v);
+    el.style.display=match?'':'none';
+  });
+}
+function expandAll(c,open){
+  document.querySelectorAll(`#g-${c} .n0, #g-${c} .n1, #g-${c} .n2`).forEach(el=>{
+    if(open)el.classList.remove('col');
+    else el.classList.add('col');
+  });
+}
+function reiniciar(){
+  document.getElementById('uploadArea').style.display='block';
+  document.getElementById('appArea').style.display='none';
+  document.getElementById('fileInput').value='';
+}
+
+// ── EXCEL EXPORT ──
+function exportarExcel(){
+  const wb=XLSX.utils.book_new();
+  const C={
+    n0hdr:'FFB8C4DE',n1hdr:'FFD4DAF0',n2hdr:'FFE4EAF7',
+    faltBg:'FFFDE8E8',sobrBg:'FFEDFAF2',neutBg:'FFFAFBFD',
+    sub0:'FFB8C4DE',sub1:'FFD8E0F0',sub2:'FFE4EAF7',
+    dkHdr:'FF2A2A2A',blHdr:'FF1A6FC4',orHdr:'FFD96C00',
+    or2:'FFF0962A',tel:'FF0A7C6E',red:'FFC0392B',
+    white:'FFFFFFFF',cubBg:'FFE2F4F0',noCubBg:'FFFDE8E8',
+    textRed:'FFC0392B',textBlue:'FF1A6FC4',textTeal:'FF0A7C6E',
+    textGray:'FF999999',textDark:'FF2A2A2A',textGreen:'FF1A7A3C',
+    textNvy:'FF1E3A5F'
+  };
+  const S=(bg,fg,bold,ra)=>({
+    fill:{patternType:'solid',fgColor:{rgb:bg||C.white}},
+    font:{bold:!!bold,color:{rgb:fg||C.textDark},name:'Arial',sz:9},
+    alignment:{horizontal:ra?'right':'left',vertical:'center'}
+  });
+
+  centros.forEach(centro=>{
+    const familias=pData[centro];
+    const rows=[];
+    const push=(cells,stls)=>rows.push({cells,stls});
+    const COLS=['Código','Descripción','Medida','RF2','DESC4','Tipo',
+      'Dif. Cant.','Dif. Importe','Val. Unit.','Cant. Cub.','Cant. NoCub.','Imp. Cub.','Imp. NoCub.'];
+    const HBGS=[C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.blHdr,C.orHdr,C.or2,C.tel,C.red,C.tel,C.red];
+    const eL={faltante:'▼ Faltante',sobrante:'▲ Sobrante',balanceado:'= Balanceado',parcial:'~ Parcial'};
+
+    // Centro title
+    push([`CENTRO: ${centro}`,...Array(12).fill('')],
+      [{fill:{patternType:'solid',fgColor:{rgb:'FF1E3A5F'}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:12},alignment:{horizontal:'left',vertical:'center'}},...Array(12).fill(S('FF1E3A5F',C.white,true))]);
+    push(Array(13).fill(''),Array(13).fill(S(C.white)));
+
+    familias.forEach(fam=>{
+      // N0 header
+      const eColor=fam.estado==='faltante'||fam.estado==='parcial'?C.textRed:fam.estado==='sobrante'?C.textGreen:C.textNvy;
+      push([`FAMILIA: ${fam.desc4}  (${fam.rf1words.join(' · ')})  · ${fam.rf1groups.length} RF1 · ${fam.faltC.length+fam.sobrC.length+fam.neutC.length} renglones`,...Array(11).fill(''),eL[fam.estado]||fam.estado],
+        Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.n0hdr}},font:{bold:true,color:{rgb:i===12?eColor:C.textNvy},name:'Arial',sz:11},alignment:{horizontal:i===12?'right':'left',vertical:'center'}})));
+
+      fam.rf1groups.forEach(g1=>{
+        // N1 header
+        const ec1=g1.estado==='faltante'||g1.estado==='parcial'?C.textRed:g1.estado==='sobrante'?C.textGreen:C.textNvy;
+        push([`  RF1: ${g1.rf1}${g1.med?' · Medida: '+g1.med:''}  · ${g1.rf2groups.length} RF2 · ${g1.faltC.length+g1.sobrC.length+g1.neutC.length} renglones`,...Array(11).fill(''),eL[g1.estado]||g1.estado],
+          Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.n1hdr}},font:{bold:true,color:{rgb:i===12?ec1:C.textNvy},name:'Arial',sz:10},alignment:{horizontal:i===12?'right':'left',vertical:'center'}})));
+
+        g1.rf2groups.forEach(g2=>{
+          // N2 header
+          const ec2=g2.estado==='faltante'||g2.estado==='parcial'?C.textRed:g2.estado==='sobrante'?C.textGreen:C.textNvy;
+          push([`    RF2: ${g2.rf2}  · ${g2.faltC.length+g2.sobrC.length+g2.neutC.length} renglones`,...Array(11).fill(''),eL[g2.estado]||g2.estado],
+            Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.n2hdr}},font:{bold:true,color:{rgb:i===12?ec2:'FF2A4A7F'},name:'Arial',sz:9},alignment:{horizontal:i===12?'right':'left',vertical:'center'}})));
+
+          // Col headers
+          push(COLS,HBGS.map((bg,i)=>({fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:9},alignment:{horizontal:i>=6?'right':'left',vertical:'center'}})));
+
+          // Data
+          [...g2.faltC,...g2.sobrC,...g2.neutC].forEach(r=>{
+            const isF=r._dq<0,isS=r._dq>0;
+            const bg=isF?C.faltBg:isS?C.sobrBg:C.neutBg;
+            const tc=isF?C.textRed:isS?C.textBlue:C.textGray;
+            push([
+              r['Codigo de Material']||'',r['Descripcion del Material']||'',
+              r['Medidas']||'',getRF2(r),getDesc4(r),
+              isF?'FALTANTE':isS?'SOBRANTE':'—',
+              r._dq,r._dv,r._vu,r.cantCub||0,r.cantNoCub||0,r.impCub||0,r.impNoCub||0
+            ],[
+              S(bg,C.textDark,true),S(bg),S(bg,C.textGray),
+              {fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:C.textNvy},name:'Arial',sz:9},alignment:{horizontal:'center',vertical:'center'}},
+              {fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:9},alignment:{horizontal:'center',vertical:'center'},fill2:{patternType:'solid',fgColor:{rgb:'FF1E3A5F'}}},
+              {fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:tc},name:'Arial',sz:9},alignment:{horizontal:'center',vertical:'center'}},
+              {...S(bg,tc,true,true),numFmt:'#,##0.00'},
+              {...S(bg,tc,true,true),numFmt:'"$"#,##0.00'},
+              {...S(bg,'FF555555',false,true),numFmt:'"$"#,##0.00'},
+              {...S(C.cubBg,C.textTeal,true,true),numFmt:'#,##0.00'},
+              {...S(r.cantNoCub>0.001?C.noCubBg:C.neutBg,r.cantNoCub>0.001?C.textRed:C.textGray,r.cantNoCub>0.001,true),numFmt:'#,##0.00'},
+              {...S(C.cubBg,C.textTeal,true,true),numFmt:'"$"#,##0.00'},
+              {...S(r.impNoCub>0.005?C.noCubBg:C.neutBg,r.impNoCub>0.005?C.textRed:C.textGray,r.impNoCub>0.005,true),numFmt:'"$"#,##0.00'}
+            ]);
+          });
+
+          // Sub RF2
+          const nI2=g2.faltC.reduce((s,r)=>s+r.impNoCub,0)+g2.sobrC.reduce((s,r)=>s+r.impNoCub,0);
+          const nC2=g2.faltC.reduce((s,r)=>s+r.cantNoCub,0)+g2.sobrC.reduce((s,r)=>s+r.cantNoCub,0);
+          const cubQ2=Math.min(g2.totalFQ,g2.totalSQ);
+          push([`Subtotal RF2: ${g2.rf2}  · Sobr ↑${fmtQ(g2.totalSQ)} / Falt ↓${fmtQ(g2.totalFQ)}`,...Array(5).fill(''),
+            g2.netQ,g2.saldoV,'—',cubQ2,nC2,g2.impCub,nI2>0.005?-nI2:0],
+            Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.sub2}},
+              font:{bold:true,name:'Arial',sz:9,color:{rgb:i===6?(g2.netQ<0?C.textRed:g2.netQ>0?C.textGreen:C.textDark):i===7?(g2.saldoV<0?C.textRed:g2.saldoV>0?C.textGreen:C.textDark):i===11?C.textTeal:i===12?(nI2>0.005?C.textRed:C.textGray):C.textDark}},
+              alignment:{horizontal:i>=6?'right':'left',vertical:'center'},
+              numFmt:i>=6&&i!==8&&i!==9?'"$"#,##0.00':'#,##0.00'})));
+        });
+
+        // Sub RF1
+        const nI1=g1.rf2groups.reduce((s,g2)=>s+g2.faltC.reduce((a,r)=>a+r.impNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.impNoCub,0),0);
+        const nC1=g1.rf2groups.reduce((s,g2)=>s+g2.faltC.reduce((a,r)=>a+r.cantNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.cantNoCub,0),0);
+        push([`TOTAL RF1: ${g1.rf1}${g1.med?' · '+g1.med:''}  · Sobr ↑${fmtQ(g1.totalSQ)} / Falt ↓${fmtQ(g1.totalFQ)}`,...Array(5).fill(''),
+          g1.netQ,g1.saldoV,'—',Math.min(g1.totalFQ,g1.totalSQ),nC1,g1.l1impCub,nI1>0.005?-nI1:0],
+          Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.sub1}},
+            font:{bold:true,name:'Arial',sz:10,color:{rgb:i===6?(g1.netQ<0?C.textRed:g1.netQ>0?C.textGreen:C.textNvy):i===7?(g1.saldoV<0?C.textRed:g1.saldoV>0?C.textGreen:C.textNvy):i===11?C.textTeal:i===12?(nI1>0.005?C.textRed:C.textGray):C.textNvy}},
+            alignment:{horizontal:i>=6?'right':'left',vertical:'center'},
+            numFmt:i>=6&&i!==8&&i!==9?'"$"#,##0.00':'#,##0.00'})));
+      });
+
+      // Sub Familia
+      const nIfam=fam.rf1groups.reduce((s,g1)=>s+g1.rf2groups.reduce((s2,g2)=>s2+g2.faltC.reduce((a,r)=>a+r.impNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.impNoCub,0),0),0);
+      const nCfam=fam.rf1groups.reduce((s,g1)=>s+g1.rf2groups.reduce((s2,g2)=>s2+g2.faltC.reduce((a,r)=>a+r.cantNoCub,0)+g2.sobrC.reduce((a,r)=>a+r.cantNoCub,0),0),0);
+      push([`FAMILIA ${fam.desc4} (${fam.rf1words.join(', ')})`,...Array(5).fill(''),
+        fam.netQ,fam.saldoV,'—',Math.min(fam.totalFQ,fam.totalSQ),nCfam,fam.famImpCub,nIfam>0.005?-nIfam:0],
+        Array(13).fill(null).map((_,i)=>({fill:{patternType:'solid',fgColor:{rgb:C.sub0}},
+          font:{bold:true,name:'Arial',sz:11,color:{rgb:i===6?(fam.netQ<0?C.textRed:fam.netQ>0?C.textGreen:C.textNvy):i===7?(fam.saldoV<0?C.textRed:fam.saldoV>0?C.textGreen:C.textNvy):i===11?C.textTeal:i===12?(nIfam>0.005?C.textRed:C.textGray):C.textNvy}},
+          alignment:{horizontal:i>=6?'right':'left',vertical:'center'},
+          numFmt:i>=6&&i!==8&&i!==9?'"$"#,##0.00':'#,##0.00'})));
+      push(Array(13).fill(''),Array(13).fill(S(C.white)));
+    });
+
+    const wsData=rows.map(r=>r.cells);
+    const ws=XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols']=[{wch:16},{wch:38},{wch:8},{wch:6},{wch:7},{wch:10},{wch:11},{wch:14},{wch:12},{wch:11},{wch:12},{wch:13},{wch:13}];
+    ws['!rows']=wsData.map(()=>({hpt:18}));
+    rows.forEach((row,ri)=>{
+      row.stls.forEach((s,ci)=>{
+        if(!s)return;
+        const addr=XLSX.utils.encode_cell({r:ri,c:ci});
+        if(!ws[addr])ws[addr]={t:'z',v:''};
+        ws[addr].s=s;
+      });
+    });
+    XLSX.utils.book_append_sheet(wb,ws,centro.substring(0,31));
+  });
+
+  // RESUMEN
+  const res=[['Centro','Familia (DESC4)','RF1 listado','RF1','Medida','RF2',
+    'Renglones','Falt. Qty','Sobr. Qty','Saldo Qty',
+    'Falt. $','Sobr. $','Cubierto $','Saldo $','Estado']];
+  centros.forEach(c=>{
+    pData[c].forEach(fam=>{
+      fam.rf1groups.forEach(g1=>{
+        g1.rf2groups.forEach(g2=>{
+          res.push([c,fam.desc4,fam.rf1words.join(' · '),g1.rf1,g1.med||'',g2.rf2,
+            g2.faltC.length+g2.sobrC.length+g2.neutC.length,
+            -g2.totalFQ,g2.totalSQ,g2.netQ,
+            -g2.totFV,g2.totSV,g2.impCub,g2.saldoV,g2.estado]);
+        });
+      });
+    });
+  });
+  const wsR=XLSX.utils.aoa_to_sheet(res);
+  wsR['!cols']=[6,8,22,10,7,6,9,10,10,10,14,14,14,14,12].map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb,wsR,'RESUMEN');
+
+  // ── Hoja: Con Compensación ──
+  const buildFlatSheet=(filtro)=>{
+    const allRows=getAllRows(filtro);
+    const esCon=filtro==='con';
+    const COLS2=['Centro','Familia DESC4','RF1 grupo','RF1','Medida','RF2','Código','Descripción',
+      'Tipo','Dif. Cant.','Dif. Importe','Val. Unit.','Cant. Cub.','Cant. NoCub.','Imp. Cub.','Imp. NoCub.','Estado RF2'];
+    const HBGS2=[C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,C.dkHdr,
+      C.blHdr,C.orHdr,C.or2,C.tel,C.red,C.tel,C.red,C.dkHdr];
+    const rows2=[];
+    const push2=(cells,stls)=>rows2.push({cells,stls});
+
+    // Title
+    const titleColor=esCon?'FF0A7C6E':'FFC0392B';
+    push2([esCon?'✅ RENGLONES CON COMPENSACIÓN':'❌ RENGLONES SIN COMPENSACIÓN',...Array(16).fill('')],
+      [{fill:{patternType:'solid',fgColor:{rgb:titleColor}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:12},alignment:{horizontal:'left',vertical:'center'}},...Array(16).fill(S(titleColor,C.white,true))]);
+    push2(Array(17).fill(''),Array(17).fill(S(C.white)));
+    push2(COLS2,HBGS2.map((bg,i)=>({fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:9},alignment:{horizontal:i>=9?'right':'left',vertical:'center'}})));
+
+    const eL={faltante:'▼ Faltante',sobrante:'▲ Sobrante',balanceado:'= Balanceado',parcial:'~ Parcial'};
+    allRows.forEach(({centro,fam,g1,g2,r})=>{
+      const isF=r._dq<0,isS=r._dq>0;
+      const bg=isF?C.faltBg:isS?C.sobrBg:C.neutBg;
+      const tc=isF?C.textRed:isS?C.textBlue:C.textGray;
+      push2([
+        centro,fam.desc4,fam.rf1words.join(' · '),g1.rf1,g1.med||'',g2.rf2,
+        r['Codigo de Material']||'',r['Descripcion del Material']||'',
+        isF?'FALTANTE':isS?'SOBRANTE':'—',
+        r._dq,r._dv,r._vu,r.cantCub||0,r.cantNoCub||0,r.impCub||0,r.impNoCub||0,
+        eL[g2.estado]||g2.estado
+      ],[
+        S(bg,C.textGray),S(bg,'FF1E3A5F',true),S(bg,C.textGray),
+        S(bg,'FF1E3A5F',true),S(bg,C.textGray),
+        {fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:'FF1E3A5F'},name:'Arial',sz:9},alignment:{horizontal:'center',vertical:'center'}},
+        S(bg,C.textDark,true),S(bg),
+        {fill:{patternType:'solid',fgColor:{rgb:bg}},font:{bold:true,color:{rgb:tc},name:'Arial',sz:9},alignment:{horizontal:'center',vertical:'center'}},
+        {...S(bg,tc,true,true),numFmt:'#,##0.00'},
+        {...S(bg,tc,true,true),numFmt:'"$"#,##0.00'},
+        {...S(bg,'FF555555',false,true),numFmt:'"$"#,##0.00'},
+        {...S(esCon?C.cubBg:bg,C.textTeal,r.cantCub>0.001,true),numFmt:'#,##0.00'},
+        {...S(r.cantNoCub>0.001?C.noCubBg:bg,r.cantNoCub>0.001?C.textRed:C.textGray,r.cantNoCub>0.001,true),numFmt:'#,##0.00'},
+        {...S(esCon?C.cubBg:bg,C.textTeal,r.impCub>0.005,true),numFmt:'"$"#,##0.00'},
+        {...S(r.impNoCub>0.005?C.noCubBg:bg,r.impNoCub>0.005?C.textRed:C.textGray,r.impNoCub>0.005,true),numFmt:'"$"#,##0.00'},
+        S(bg,g2.estado==='faltante'||g2.estado==='parcial'?C.textRed:g2.estado==='sobrante'?C.textGreen:C.textNvy,true)
+      ]);
+    });
+
+    const wsData2=rows2.map(r=>r.cells);
+    const ws2=XLSX.utils.aoa_to_sheet(wsData2);
+    ws2['!cols']=[{wch:8},{wch:7},{wch:22},{wch:12},{wch:8},{wch:6},{wch:16},{wch:38},{wch:10},{wch:11},{wch:14},{wch:12},{wch:11},{wch:12},{wch:13},{wch:13},{wch:12}];
+    ws2['!rows']=wsData2.map(()=>({hpt:18}));
+    rows2.forEach((row,ri)=>{
+      row.stls.forEach((st,ci)=>{
+        if(!st)return;
+        const addr=XLSX.utils.encode_cell({r:ri,c:ci});
+        if(!ws2[addr])ws2[addr]={t:'z',v:''};
+        ws2[addr].s=st;
+      });
+    });
+    return ws2;
+  };
+
+  XLSX.utils.book_append_sheet(wb,buildFlatSheet('con'),'CON COMPENSACION');
+  XLSX.utils.book_append_sheet(wb,buildFlatSheet('sin'),'SIN COMPENSACION');
+
+  XLSX.writeFile(wb,'Compensacion_Multinivel.xlsx');
+}
+</script>
+</body>
+</html>
