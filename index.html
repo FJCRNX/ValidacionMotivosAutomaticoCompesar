@@ -233,11 +233,16 @@ function getMedida(row){
 
 // ── COMPENSATION ENGINE ──
 function enrichRows(rows){
-  return rows.map(r=>{
-    const dq=Number(r['Diferencia en Cantidad']||0);
-    const dv=Number(r['Diferencia en Valores']||0);
-    return{...r,_dq:dq,_dv:dv,_vu:dq!==0?Math.abs(dv/dq):0};
-  });
+  return rows
+    .map(r=>{
+      const dq=Number(r['Diferencia en Cantidad']||0);
+      const dv=Number(r['Diferencia en Valores']||0);
+      return{...r,_dq:dq,_dv:dv,_vu:dq!==0?Math.abs(dv/dq):0};
+    })
+    // ── Si un renglón no tiene diferencia de cantidad NI de importe
+    // (ambos en cero), no aporta nada al análisis: se omite por completo,
+    // no se procesa ni se muestra en ninguna tabla/pestaña/Excel. ──
+    .filter(r=>Math.abs(r._dq)>0.0001||Math.abs(r._dv)>0.0001);
 }
 
 function applyCoverage(rows){
