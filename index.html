@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Compensación de Inventario</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;background:#f0f2f7;color:#1a1a2e;font-size:13px}
@@ -122,6 +122,12 @@ tr.sub2{background:#e4eaf7;font-weight:700;font-size:11px;border-top:2px solid #
     <b>Cargar archivo Excel</b>
     <p>Arrastra tu .xlsx o haz clic para seleccionar</p>
     <p style="margin-top:5px;font-size:11px;color:#bbb">Columnas: Centro · Codigo de Material · Descripcion del Material · Medidas · Rf1 · Cantidad Contada · Existencia Teorica · Diferencia en Cantidad · Diferencia en Valores · RF2 (opcional)</p>
+    <p style="margin-top:8px;font-size:11px;color:#1e3a5f;background:#eef3ff;display:inline-block;padding:5px 10px;border-radius:5px;line-height:1.6">
+      📐 Medida automática: dimensiones (11x11, 51.1x51.1) solo si la descripción empieza con "PISO" o "AZ" · peso (5kg) · volumen (1.5L) · galones (1GAL) en cualquier descripción<br>
+      ✅ Un renglón solo se considera compensado si su faltante queda cubierto al <b>100%</b> por sobrante de su misma agrupación<br>
+      ⚖️ Si sobra inventario (más del 100%), el excedente se manda a "Sin Compensación" — siempre se deja sin usar el renglón de <b>mayor valor</b><br>
+      🚫 Si un código no tiene nada contra qué compensar (solo falta o solo sobra en su agrupación), se manda completo a "Sin Compensación"
+    </p>
   </div>
   <input type="file" id="fileInput" accept=".xlsx,.xls">
 </div>
@@ -178,6 +184,53 @@ function getRF2(row){
   return String(row['Codigo de Material']||'??').trim().toUpperCase().substring(0,2);
 }
 
+// ── Umbral mínimo de cobertura para considerar un renglón "compensado" ──
+// La regla de negocio es: el faltante debe quedar cubierto al 100% por el sobrante
+// disponible en su agrupación (mismo RF2). Si un renglón no llega al 100%, se manda
+// a "SIN compensación". Si un renglón de SOBRANTE excede lo necesario para cubrir
+// el faltante (sobra más del 100%), ese excedente también se manda a "SIN compensación"
+// (sobrante sin usar). Se usa una tolerancia mínima por redondeo de punto flotante.
+const COBERTURA_MIN=0.999; // 100% (con tolerancia de 0.1% por redondeo)
+
+// ── Detección automática de medida desde la descripción ──
+// Prioridad: columna "Medidas" si existe y no está vacía.
+// Reglas:
+//  · Si la descripción empieza con "PISO" o "AZ" (Azulejo, etc.) se buscan
+//    dimensiones tipo 11x11, 11.1x11.1, 44x44, 51.1x51.1, 59.1x120 (2 o 3 medidas).
+//  · Para el resto de descripciones NO se busca este patrón de dimensiones
+//    (evita falsos positivos con códigos/números que no son medidas).
+//  · Para TODAS las descripciones se busca peso (5kg, 10Kg), volumen/litros
+//    (1.5L, 20Lts, 750ml) y galones (1GAL, 5 Gal, 20 Galones).
+const RX_DIM=/\d+(?:\.\d+)?\s*[xX]\s*\d+(?:\.\d+)?(?:\s*[xX]\s*\d+(?:\.\d+)?)?/;
+const RX_PESO=/\d+(?:\.\d+)?\s*(kgs?|kilos?|grs?|gramos?)\b/i;
+const RX_VOL=/\d+(?:\.\d+)?\s*(lts?|litros?|ml)\b/i;
+const RX_VOL_L=/\b\d+(?:\.\d+)?\s*[lL]\b/; // "L" suelta = litros
+const RX_GAL=/\d+(?:\.\d+)?\s*(gal(?:on(?:es)?)?s?)\b/i; // 1GAL, 5 Gal, 20 Galones
+const RX_PREFIJO_MEDIDA=/^\s*(piso|az)/i; // PISO... o AZ... (Azulejo)
+
+const _medCache=new Map();
+function detectarMedidaDesc(desc){
+  if(_medCache.has(desc))return _medCache.get(desc);
+  let v=null;
+  if(RX_PREFIJO_MEDIDA.test(desc)){
+    const m=desc.match(RX_DIM);
+    if(m)v=m[0].replace(/\s+/g,'').replace(/[xX]/g,'x');
+  }
+  if(!v){const m=desc.match(RX_PESO);if(m)v=m[0].replace(/\s+/g,'');}
+  if(!v){const m=desc.match(RX_GAL);if(m)v=m[0].replace(/\s+/g,'').toUpperCase();}
+  if(!v){const m=desc.match(RX_VOL);if(m)v=m[0].replace(/\s+/g,'');}
+  if(!v){const m=desc.match(RX_VOL_L);if(m)v=m[0].replace(/\s+/g,'');}
+  _medCache.set(desc,v);
+  return v;
+}
+function getMedida(row){
+  const raw=row['Medidas'];
+  if(raw!=null&&String(raw).trim()!=='')return String(raw).trim();
+  const desc=String(row['Descripcion del Material']||'').trim();
+  if(!desc)return null;
+  return detectarMedidaDesc(desc);
+}
+
 // ── COMPENSATION ENGINE ──
 function enrichRows(rows){
   return rows.map(r=>{
@@ -188,33 +241,59 @@ function enrichRows(rows){
 }
 
 function applyCoverage(rows){
-  const falt=rows.filter(r=>r._dq<0);
-  const sobr=rows.filter(r=>r._dq>0);
-  const neut=rows.filter(r=>r._dq===0);
+  const falt=rows.filter(r=>r._dq<0).map(r=>({...r}));
+  const sobr=rows.filter(r=>r._dq>0).map(r=>({...r}));
+  const neut=rows.filter(r=>r._dq===0).map(r=>({...r,cantCub:0,cantNoCub:0,impCub:0,impNoCub:0}));
+
+  // Por defecto, todo queda SIN compensar (cantCub=0)
+  falt.forEach(r=>{r.cantCub=0;r.cantNoCub=Math.abs(r._dq);r.impCub=0;r.impNoCub=r.cantNoCub*r._vu;});
+  sobr.forEach(r=>{r.cantCub=0;r.cantNoCub=r._dq;r.impCub=0;r.impNoCub=r.cantNoCub*r._vu;});
+
+  // ── Regla: solo puede haber compensación si en la agrupación existen
+  // AMBOS tipos (faltante Y sobrante) Y comparten la MISMA Unidad de Medida
+  // Base (no se puede compensar una pieza "PI" contra un saco "SAC" o un
+  // metro "M"). Si un código no tiene nada contra qué compensar, queda
+  // 100% SIN compensar. ──
+  if(falt.length>0&&sobr.length>0){
+    const unidades=new Set([...falt,...sobr].map(r=>String(r['Unidad de Medida Base']||'').trim().toUpperCase()));
+    unidades.forEach(u=>{
+      const faltU=falt.filter(r=>String(r['Unidad de Medida Base']||'').trim().toUpperCase()===u);
+      const sobrU=sobr.filter(r=>String(r['Unidad de Medida Base']||'').trim().toUpperCase()===u);
+      if(!faltU.length||!sobrU.length)return; // sin pareja dentro de la misma unidad
+
+      // ── Regla: orden ASCENDENTE por importe absoluto. Se usan primero los
+      // renglones de MENOR valor para casar faltante↔sobrante; el EXCEDENTE
+      // (si sobra o falta inventario más allá de lo que se puede emparejar)
+      // siempre queda en el renglón de MAYOR valor. Esto minimiza el importe
+      // total reportado como "compensado" (criterio conservador de auditoría).
+      const faltOrd=[...faltU].sort((a,b)=>Math.abs(a._dv)-Math.abs(b._dv));
+      const sobrOrd=[...sobrU].sort((a,b)=>Math.abs(a._dv)-Math.abs(b._dv));
+
+      let avS=sobrOrd.reduce((s,r)=>s+r._dq,0);
+      faltOrd.forEach(r=>{
+        const aq=Math.abs(r._dq);
+        const cc=Math.min(aq,Math.max(0,avS));
+        avS-=cc;
+        r.cantCub=cc;r.cantNoCub=aq-cc;
+        r.impCub=cc*r._vu;r.impNoCub=r.cantNoCub*r._vu;
+      });
+      let avF=faltOrd.reduce((s,r)=>s+Math.abs(r._dq),0);
+      sobrOrd.forEach(r=>{
+        const q=r._dq;
+        const cc=Math.min(q,Math.max(0,avF));
+        avF-=cc;
+        r.cantCub=cc;r.cantNoCub=q-cc;
+        r.impCub=cc*r._vu;r.impNoCub=r.cantNoCub*r._vu;
+      });
+    });
+  }
+
+  const faltC=falt,sobrC=sobr,neutC=neut;
   const totalSQ=sobr.reduce((s,r)=>s+r._dq,0);
   const totalFQ=falt.reduce((s,r)=>s+Math.abs(r._dq),0);
-
-  let avS=totalSQ;
-  const faltC=falt.map(r=>{
-    const aq=Math.abs(r._dq);
-    const cc=Math.min(aq,Math.max(0,avS));
-    avS=Math.max(0,avS-aq);
-    const cnc=aq-cc;
-    return{...r,cantCub:cc,cantNoCub:cnc,impCub:cc*r._vu,impNoCub:cnc*r._vu};
-  });
-  let avF=totalFQ;
-  const sobrC=sobr.map(r=>{
-    const q=r._dq;
-    const cc=Math.min(q,Math.max(0,avF));
-    avF=Math.max(0,avF-q);
-    const cnc=q-cc;
-    return{...r,cantCub:cc,cantNoCub:cnc,impCub:cc*r._vu,impNoCub:cnc*r._vu};
-  });
-  const neutC=neut.map(r=>({...r,cantCub:0,cantNoCub:0,impCub:0,impNoCub:0}));
-
   const totFV=falt.reduce((s,r)=>s+Math.abs(r._dv),0);
   const totSV=sobr.reduce((s,r)=>s+r._dv,0);
-  const impCub=faltC.reduce((s,r)=>s+r.impCub,0);
+  const impCub=faltC.reduce((s,r)=>s+r.impCub,0); // $ del faltante que quedó compensado
   const netQ=totalSQ-totalFQ;
   const saldoV=totSV-totFV;
   let estado;
@@ -225,6 +304,82 @@ function applyCoverage(rows){
   else estado='parcial';
 
   return{faltC,sobrC,neutC,totFV,totSV,impCub,netQ,saldoV,estado,totalFQ,totalSQ};
+}
+
+// ── Clave de similitud: primeras 5 letras de la descripción, normalizada ──
+function descKey5(desc){
+  return String(desc||'').trim().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'') // sin acentos
+    .replace(/[^A-Z0-9]/g,'').substring(0,5);
+}
+
+// ── 2da pasada: compensa lo que quedó SIN cubrir tras las reglas
+// multinivel (Centro→Familia→RF1+Medida→RF2), cruzando por similitud de
+// descripción (primeras 5 letras). Útil cuando el código no coincide en RF2
+// (ej. "AU..." vs "AO...") pero la descripción es la misma pieza
+// (ej. ambos son "ABRAZ..."). Solo se aplica sobre el remanente (cantNoCub)
+// que dejó la primera pasada, y con la misma regla de excedente al de
+// mayor valor. ──
+function segundaPasadaPorDescripcion(familias){
+  const todas=[];
+  familias.forEach(fam=>fam.rf1groups.forEach(g1=>g1.rf2groups.forEach(g2=>{
+    g2.faltC.forEach(r=>todas.push(r));
+    g2.sobrC.forEach(r=>todas.push(r));
+  })));
+
+  const residuales=todas.filter(r=>r.cantNoCub>0.0005);
+  if(residuales.length<2)return;
+
+  const grupos={};
+  residuales.forEach(r=>{
+    const k=descKey5(r['Descripcion del Material']);
+    if(!k)return;
+    (grupos[k]=grupos[k]||[]).push(r);
+  });
+
+  Object.values(grupos).forEach(grp=>{
+    // Dentro del grupo por similitud, además debe coincidir la Unidad de
+    // Medida Base (no cruzar piezas "PI" contra sacos "SAC", metros "M", etc.)
+    const unidades=new Set(grp.map(r=>String(r['Unidad de Medida Base']||'').trim().toUpperCase()));
+    unidades.forEach(u=>{
+      const faltR=grp.filter(r=>r._dq<0&&String(r['Unidad de Medida Base']||'').trim().toUpperCase()===u);
+      const sobrR=grp.filter(r=>r._dq>0&&String(r['Unidad de Medida Base']||'').trim().toUpperCase()===u);
+      if(!faltR.length||!sobrR.length)return; // no hay nada que cruzar
+
+      const faltOrd=[...faltR].sort((a,b)=>a.impNoCub-b.impNoCub);
+      const sobrOrd=[...sobrR].sort((a,b)=>a.impNoCub-b.impNoCub);
+      const totalFaltRem=faltOrd.reduce((s,r)=>s+r.cantNoCub,0);
+      const totalSobrRem=sobrOrd.reduce((s,r)=>s+r.cantNoCub,0);
+
+      let avS=totalSobrRem;
+      faltOrd.forEach(r=>{
+        const aq=r.cantNoCub;
+        const cc=Math.min(aq,Math.max(0,avS));
+        avS-=cc;
+        if(cc>0.0005){r._porSimilitud=true;}
+        r.cantCub+=cc;r.cantNoCub-=cc;
+        r.impCub+=cc*r._vu;r.impNoCub-=cc*r._vu;
+      });
+      let avF=totalFaltRem;
+      sobrOrd.forEach(r=>{
+        const q=r.cantNoCub;
+        const cc=Math.min(q,Math.max(0,avF));
+        avF-=cc;
+        if(cc>0.0005){r._porSimilitud=true;}
+        r.cantCub+=cc;r.cantNoCub-=cc;
+        r.impCub+=cc*r._vu;r.impNoCub-=cc*r._vu;
+      });
+    });
+  });
+
+  // Recalcular roll-ups de "Imp. Cubierto" en RF2 → RF1 → Familia
+  familias.forEach(fam=>{
+    fam.rf1groups.forEach(g1=>{
+      g1.rf2groups.forEach(g2=>{g2.impCub=g2.faltC.reduce((s,r)=>s+r.impCub,0);});
+      g1.l1impCub=g1.rf2groups.reduce((s,g2)=>s+g2.impCub,0);
+    });
+    fam.famImpCub=fam.rf1groups.reduce((s,g1)=>s+g1.l1impCub,0);
+  });
 }
 
 // ── BUILD HIERARCHY ──
@@ -245,7 +400,7 @@ function processCentro(rows){
     const rf1map={};
     drows.forEach(r=>{
       const rf1=(r['Rf1']||'SIN_RF1').toString().trim();
-      const med=r['Medidas']!=null&&r['Medidas']!==''?String(r['Medidas']).trim():null;
+      const med=getMedida(r);
       const k=rf1+'||'+(med||'');
       if(!rf1map[k])rf1map[k]={rf1,med,rows:[]};
       rf1map[k].rows.push(r);
@@ -282,6 +437,11 @@ function processCentro(rows){
   });
 
   familias.sort((a,b)=>ord(a.estado)-ord(b.estado)||a.saldoV-b.saldoV);
+
+  // ── Última regla: cruce por similitud de descripción sobre lo que
+  // quedó sin compensar con las reglas multinivel anteriores ──
+  segundaPasadaPorDescripcion(familias);
+
   return familias;
 }
 
@@ -357,11 +517,17 @@ function switchTab(c){
   document.getElementById('tc-'+c).classList.add('active');
 }
 
-// ── Determinar si un renglón tuvo compensación ──
-// Un renglón "con compensación" es aquel cuya cantCub > 0
-// Un renglón "sin compensación" es aquel cuyo cantNoCub == absQ (nada cubierto) o es neutro sin grupo compensado
+// ── Determinar si un renglón tuvo compensación suficiente ──
+// Un renglón se considera "CON compensación" solo si la cantidad cubierta
+// alcanza al menos el 100% (COBERTURA_MIN) de su diferencia total en cantidad.
+// Si cubre menos de ese porcentaje, se envía a "SIN compensación".
+function pctCobertura(r){
+  const totalQ=(r.cantCub||0)+(r.cantNoCub||0);
+  if(totalQ<=0.0001)return 0;
+  return (r.cantCub||0)/totalQ;
+}
 function tieneCompensacion(r){
-  return r.cantCub>0.001;
+  return pctCobertura(r)>=COBERTURA_MIN;
 }
 
 // ── Recolectar TODOS los renglones procesados de todos los centros ──
@@ -386,11 +552,59 @@ function getAllRows(filtro){
 }
 
 // ── Renderizar vista global agrupada ──
+// ── Estadísticas agregadas a partir de una lista de renglones ya procesados ──
+function sumRowsStats(rows){
+  const totalFQ=rows.filter(r=>r._dq<0).reduce((s,r)=>s+Math.abs(r._dq),0);
+  const totalSQ=rows.filter(r=>r._dq>0).reduce((s,r)=>s+r._dq,0);
+  const totFV=rows.filter(r=>r._dq<0).reduce((s,r)=>s+Math.abs(r._dv),0);
+  const totSV=rows.filter(r=>r._dq>0).reduce((s,r)=>s+r._dv,0);
+  const impCub=rows.reduce((s,r)=>s+(r.impCub||0),0);
+  const impNoCub=rows.reduce((s,r)=>s+(r.impNoCub||0),0);
+  const cantCub=rows.reduce((s,r)=>s+(r.cantCub||0),0);
+  const cantNoCub=rows.reduce((s,r)=>s+(r.cantNoCub||0),0);
+  const netQ=totalSQ-totalFQ;
+  const saldoV=totSV-totFV;
+  return{totalFQ,totalSQ,totFV,totSV,impCub,impNoCub,cantCub,cantNoCub,netQ,saldoV};
+}
+function mkSubG(cls,label,cols){
+  return`<tr class="${cls}"><td colspan="7" style="font-size:10px">${label}</td>${cols}</tr>`;
+}
+function renderSubtotalGlobalRow(label,rows,cls){
+  const s=sumRowsStats(rows);
+  return mkSubG(cls,label,subCols(s.netQ,s.saldoV,s.totalFQ,s.totalSQ,s.impCub,s.cantNoCub,s.impNoCub));
+}
+function renderSubtotalGlobalBar(label,rows,bg,border,fsz){
+  const s=sumRowsStats(rows);
+  return`<div style="background:${bg};padding:${fsz===12?9:7}px 16px;border-top:2px solid ${border};display:flex;gap:16px;flex-wrap:wrap;font-size:${fsz}px;font-weight:${fsz>=11?800:700}">
+    <span style="color:#1e3a5f">${label}</span>
+    <span class="${s.netQ<0?'cn':s.netQ>0?'cp':'cz'}">Dif. Cant: ${s.netQ>0?'+':''}${fmtQ(s.netQ)}</span>
+    <span class="${s.saldoV<0?'cn':s.saldoV>0?'cp':'cz'}">Saldo: ${s.saldoV<0?'-$':'$'}${Math.abs(s.saldoV).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span style="color:#0a7c6e">Cubierto: $${s.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    <span class="${s.impNoCub>0.005?'cn':'cg'}">No Cubierto: $${s.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+  </div>`;
+}
+
+const TABLA_HEAD_GLOBAL=`<thead><tr>
+  <th class="hd">Centro</th>
+  <th class="hd" style="min-width:110px">Código</th>
+  <th class="hd" style="min-width:170px">Descripción</th>
+  <th class="hd">Medida</th>
+  <th class="hd">RF2</th>
+  <th class="hd">DESC4</th>
+  <th class="hd">Tipo</th>
+  <th class="hb">Dif. Cant.</th>
+  <th class="ho">Dif. Importe</th>
+  <th class="ho2">Val. Unit.</th>
+  <th class="ht">Cant. Cub.</th>
+  <th class="hr">Cant. NoCub.</th>
+  <th class="ht">Imp. Cub.</th>
+  <th class="hr">Imp. NoCub.</th>
+</tr></thead>`;
 function renderGlobal(filtro){
   const allRows=getAllRows(filtro);
   const esCon=filtro==='con';
   const color=esCon?'#0a7c6e':'#c0392b';
-  const titulo=esCon?'Renglones CON compensación (cantCub > 0)':'Renglones SIN compensación (cantNoCub = total)';
+  const titulo=esCon?'Renglones CON compensación (100% del faltante cubierto)':'Renglones SIN compensación (faltante no cubierto al 100% o sobrante excedente)';
 
   if(!allRows.length) return`<div style="padding:40px;text-align:center;color:#aaa;font-size:14px">${esCon?'No hay renglones compensados':'No hay renglones sin compensar'}</div>`;
 
@@ -412,7 +626,6 @@ function renderGlobal(filtro){
   </div>`;
 
   // Agrupar por Centro → DESC4 → RF1 → RF2 (misma jerarquía visual)
-  // Construir estructura a partir de allRows
   const byKey={};
   allRows.forEach(x=>{
     const k0=x.centro;
@@ -430,9 +643,11 @@ function renderGlobal(filtro){
 
   Object.entries(byKey).forEach(([centro,c0])=>{
     h+=`<div style="background:#1e3a5f;color:#fff;padding:8px 14px;border-radius:6px 6px 0 0;font-weight:800;font-size:13px;margin-top:14px">📍 CENTRO: ${centro}</div>`;
+    const centroRows=[];
     Object.entries(c0.children).forEach(([d4,c1])=>{
       const id0=uid();
       const fam=c1.fam;
+      const famRows=[];
       h+=`<div class="n0" id="${id0}" style="border-radius:0;margin-bottom:2px">
         <div class="n0-hdr" onclick="tog('${id0}')">
           <span class="ch">▼</span>
@@ -443,6 +658,7 @@ function renderGlobal(filtro){
       Object.entries(c1.children).forEach(([k2,c2])=>{
         const id1=uid();
         const g1=c2.g1;
+        const rf1Rows=[];
         h+=`<div class="n1" id="${id1}">
           <div class="n1-hdr" onclick="tog('${id1}')">
             <span class="ch">▼</span>
@@ -451,9 +667,13 @@ function renderGlobal(filtro){
             <span class="stat" style="flex:1;margin-left:6px">${Object.keys(c2.children).length} RF2</span>
           </div>
           <div class="n1-body">`;
-        Object.entries(c2.children).forEach(([rf2,c3])=>{
+        const rf2Entries=Object.entries(c2.children);
+        const rf2Multi=rf2Entries.filter(([,c3])=>c3.g2.faltC.length>0&&c3.g2.sobrC.length>0);
+        const rf2Solos=rf2Entries.filter(([,c3])=>c3.g2.faltC.length===0||c3.g2.sobrC.length===0);
+        rf2Multi.forEach(([rf2,c3])=>{
           const id2=uid();
           const g2=c3.g2;
+          rf1Rows.push(...c3.rows);
           h+=`<div class="n2" id="${id2}">
             <div class="n2-hdr" onclick="tog('${id2}')">
               <span class="ch">▼</span>
@@ -464,34 +684,53 @@ function renderGlobal(filtro){
             <div class="n2-body">
               <div class="tbl-wrap">
               <table>
-                <thead><tr>
-                  <th class="hd">Centro</th>
-                  <th class="hd" style="min-width:110px">Código</th>
-                  <th class="hd" style="min-width:170px">Descripción</th>
-                  <th class="hd">Medida</th>
-                  <th class="hd">RF2</th>
-                  <th class="hd">DESC4</th>
-                  <th class="hd">Tipo</th>
-                  <th class="hb">Dif. Cant.</th>
-                  <th class="ho">Dif. Importe</th>
-                  <th class="ho2">Val. Unit.</th>
-                  <th class="ht">Cant. Cub.</th>
-                  <th class="hr">Cant. NoCub.</th>
-                  <th class="ht">Imp. Cub.</th>
-                  <th class="hr">Imp. NoCub.</th>
-                </tr></thead>
+                ${TABLA_HEAD_GLOBAL}
                 <tbody>
                   ${c3.rows.map(r=>renderRowCentro(r,centro)).join('')}
+                  ${renderSubtotalGlobalRow(`Subtotal RF2: ${rf2}`,c3.rows,'sub2')}
                 </tbody>
               </table>
               </div>
             </div>
           </div>`;
         });
-        h+=`</div></div>`;
+        if(rf2Solos.length){
+          const idS=uid();
+          const solosRows=rf2Solos.flatMap(([,c3])=>c3.rows);
+          rf1Rows.push(...solosRows);
+          const nComp=solosRows.filter(r=>tieneCompensacion(r)).length;
+          h+=`<div class="n2" id="${idS}" style="border-left:3px solid #c9a227;background:#fffdf5">
+            <div class="n2-hdr" onclick="tog('${idS}')" style="background:#fff3cd">
+              <span class="ch">▼</span>
+              <span class="pill" style="background:#8a6d1d;color:#fff">⚠ RENGLONES INDIVIDUALES</span>
+              <span class="stat" style="flex:1;margin-left:6px">${solosRows.length} código${solosRows.length!==1?'s':''} sin pareja en su propio RF2 · ${nComp} compensado(s) por similitud</span>
+            </div>
+            <div class="n2-body">
+              <div class="tbl-wrap">
+              <table>
+                ${TABLA_HEAD_GLOBAL}
+                <tbody>
+                  ${solosRows.map(r=>renderRowCentro(r,centro)).join('')}
+                </tbody>
+              </table>
+              </div>
+            </div>
+          </div>`;
+        }
+        famRows.push(...rf1Rows);
+        h+=`</div>${renderSubtotalGlobalBar(`TOTAL RF1: ${g1.rf1}${g1.med?' · '+g1.med:''}`,rf1Rows,'#d4daf0','#9aaacf',11)}</div>`;
       });
-      h+=`</div></div>`;
+      centroRows.push(...famRows);
+      h+=`</div>${renderSubtotalGlobalBar(`FAMILIA: ${d4} (${fam.rf1words.join(', ')})`,famRows,'#b8c4de','#8a9ec0',12)}</div>`;
     });
+    const sC=sumRowsStats(centroRows);
+    h+=`<div style="background:#1e3a5f;padding:10px 16px;border-top:2px solid #16314f;display:flex;gap:16px;flex-wrap:wrap;font-size:13px;font-weight:900;border-radius:0 0 6px 6px;margin-bottom:4px">
+      <span style="color:#fff">TOTAL CENTRO: ${centro}</span>
+      <span style="color:${sC.netQ<0?'#ffb4b4':sC.netQ>0?'#9be8b8':'#cfd8ec'}">Dif. Cant: ${sC.netQ>0?'+':''}${fmtQ(sC.netQ)}</span>
+      <span style="color:${sC.saldoV<0?'#ffb4b4':sC.saldoV>0?'#9be8b8':'#cfd8ec'}">Saldo: ${sC.saldoV<0?'-$':'$'}${Math.abs(sC.saldoV).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+      <span style="color:#7fd9c9">Cubierto: $${sC.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+      <span style="color:${sC.impNoCub>0.005?'#ffb4b4':'#cfd8ec'}">No Cubierto: $${sC.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</span>
+    </div>`;
   });
 
   h+=`<div style="margin-bottom:16px"></div>`;
@@ -505,16 +744,16 @@ function renderRowCentro(r,centro){
   return`<tr class="${cls}">
     <td style="font-size:10px;color:#888">${centro}</td>
     <td><b>${r['Codigo de Material']||''}</b></td>
-    <td style="font-size:11px">${r['Descripcion del Material']||''}</td>
-    <td class="r cg">${r['Medidas']||'—'}</td>
+    <td style="font-size:11px">${r['Descripcion del Material']||''}${r._porSimilitud?' <span title="Compensado cruzando por similitud de descripción (no coincide RF2/código)" style="background:#fff3cd;color:#8a6d1d;font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;margin-left:4px">🔗 SIMIL.</span>':''}</td>
+    <td class="r cg">${getMedida(r)||'—'}</td>
     <td style="text-align:center"><span style="background:#1e3a5f22;color:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${getRF2(r)}</span></td>
     <td style="text-align:center"><span style="background:#1e3a5f;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${getDesc4(r)}</span></td>
     <td class="${isF?'tf':isS?'ts':'cg'}">${isF?'FALTANTE':isS?'SOBRANTE':'—'}</td>
     <td class="${dc} r">${isF?'':'+'}${fmtQ(r._dq)}</td>
     <td class="${dc} r">${r._dv<0?'-$':'$'}${Math.abs(r._dv).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
     <td class="r" style="color:#555">$${r._vu.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
-    <td class="r cb2">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
-    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
+    <td class="r cb2" title="${(pctCobertura(r)*100).toFixed(0)}% cubierto">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
+    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}" title="${(pctCobertura(r)*100).toFixed(0)}% cubierto · min. ${Math.round(COBERTURA_MIN*100)}%">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
     <td class="r cb2">${r.impCub>0.005?'$'+r.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'—'}</td>
     <td class="r ${r.impNoCub>0.005?'cr2':'cg'}">${r.impNoCub>0.005?'$'+r.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'$0.00'}</td>
   </tr>`;
@@ -592,10 +831,45 @@ function renderFamilia(fam,centro,idx){
 </div>`;
 }
 
+// Encabezado de tabla de renglones (compartido por RF2 normal y por la
+// tabla consolidada de "renglones individuales")
+const TABLA_HEAD=`<thead><tr>
+  <th class="hd" style="min-width:110px">Código</th>
+  <th class="hd" style="min-width:175px">Descripción</th>
+  <th class="hd" style="width:48px">Medida</th>
+  <th class="hd" style="width:38px">RF2</th>
+  <th class="hd" style="width:45px">DESC4</th>
+  <th class="hd" style="width:75px">Tipo</th>
+  <th class="hb" style="width:90px">Dif. Cant.</th>
+  <th class="ho" style="width:105px">Dif. Importe</th>
+  <th class="ho2" style="width:95px">Val. Unit.</th>
+  <th class="ht" style="width:100px">Cant. Cub.</th>
+  <th class="hr" style="width:105px">Cant. NoCub.</th>
+  <th class="ht" style="width:105px">Imp. Cub.</th>
+  <th class="hr" style="width:110px">Imp. NoCub.</th>
+</tr></thead>`;
+
 function renderRF1(g1,centro,fidx,r1idx){
   const id=`n1-${centro}-${fidx}-${r1idx}`;
   const nRf2=g1.rf2groups.length;
   const nRows=g1.faltC.length+g1.sobrC.length+g1.neutC.length;
+
+  // ── Regla: una tabla "RF2" solo se muestra como tabla propia si tiene 2 o
+  // más renglones (es decir, si realmente hay algo que comparar dentro de su
+  // propio RF2). Los RF2 con un solo renglón (nada con qué compensar en su
+  // propio grupo, aunque se hayan compensado por similitud con OTRO RF2) se
+  // consolidan en una sola tabla aparte, para no mostrar mini-tablas de 1
+  // renglón sin contexto. ──
+  // ── Regla: una tabla "RF2" solo se muestra como tabla propia si tiene
+  // AMBOS tipos (al menos 1 faltante Y al menos 1 sobrante) dentro de su
+  // propio RF2 — solo ahí hay algo que comparar internamente. Si un RF2
+  // tiene puros faltantes o puros sobrantes (sin importar cuántos renglones
+  // sean), no hay nada que compensar dentro de ese grupo: si terminaron
+  // compensados fue por similitud con OTRO RF2, así que se consolidan en
+  // una sola tabla aparte para no mostrar tablas de "puro faltante" o "puro
+  // sobrante" como si fueran una compensación propia. ──
+  const multi=g1.rf2groups.filter(g2=>g2.faltC.length>0&&g2.sobrC.length>0);
+  const solos=g1.rf2groups.filter(g2=>g2.faltC.length===0||g2.sobrC.length===0);
 
   return`<div class="n1" id="${id}">
   <div class="n1-hdr" onclick="tog('${id}')">
@@ -608,8 +882,37 @@ function renderRF1(g1,centro,fidx,r1idx){
     <span style="font-size:10px;color:#0a7c6e;margin-left:6px">Cub: ${fmtMoney(g1.l1impCub)}</span>
   </div>
   <div class="n1-body">
-    ${g1.rf2groups.map((g2,k)=>renderRF2(g2,centro,fidx,r1idx,k)).join('')}
+    ${multi.map((g2,k)=>renderRF2(g2,centro,fidx,r1idx,k)).join('')}
+    ${solos.length?renderSolos(solos,centro,fidx,r1idx):''}
     ${renderSubtotalRF1(g1)}
+  </div>
+</div>`;
+}
+
+// ── Tabla consolidada de renglones "solitarios": códigos cuyo propio RF2 no
+// tiene ninguna otra fila con qué compararse. Si terminaron compensados es
+// porque la similitud de descripción los emparejó con un código de OTRO RF2
+// (se marcan con 🔗 SIMIL.); si no, van íntegros sin compensar. ──
+function renderSolos(solos,centro,fidx,r1idx){
+  const id=`n2s-${centro}-${fidx}-${r1idx}`;
+  const rows=solos.flatMap(g2=>[...g2.faltC,...g2.sobrC,...g2.neutC]);
+  const nComp=rows.filter(r=>tieneCompensacion(r)).length;
+  const nSin=rows.length-nComp;
+  return`<div class="n2" id="${id}" style="border-left:3px solid #c9a227;background:#fffdf5">
+  <div class="n2-hdr" onclick="tog('${id}')" style="background:#fff3cd">
+    <span class="ch">▼</span>
+    <span class="pill" style="background:#8a6d1d;color:#fff">⚠ RENGLONES INDIVIDUALES</span>
+    <span class="stat" style="flex:1;margin-left:6px">${rows.length} código${rows.length!==1?'s':''} sin pareja en su propio RF2 · ${nComp} compensado(s) por similitud · ${nSin} sin compensar</span>
+  </div>
+  <div class="n2-body">
+    <div class="tbl-wrap">
+    <table>
+      ${TABLA_HEAD}
+      <tbody>
+        ${rows.map(renderRow).join('')}
+      </tbody>
+    </table>
+    </div>
   </div>
 </div>`;
 }
@@ -630,21 +933,7 @@ function renderRF2(g2,centro,fidx,r1idx,r2idx){
   <div class="n2-body">
     <div class="tbl-wrap">
     <table>
-      <thead><tr>
-        <th class="hd" style="min-width:110px">Código</th>
-        <th class="hd" style="min-width:175px">Descripción</th>
-        <th class="hd" style="width:48px">Medida</th>
-        <th class="hd" style="width:38px">RF2</th>
-        <th class="hd" style="width:45px">DESC4</th>
-        <th class="hd" style="width:75px">Tipo</th>
-        <th class="hb" style="width:90px">Dif. Cant.</th>
-        <th class="ho" style="width:105px">Dif. Importe</th>
-        <th class="ho2" style="width:95px">Val. Unit.</th>
-        <th class="ht" style="width:100px">Cant. Cub.</th>
-        <th class="hr" style="width:105px">Cant. NoCub.</th>
-        <th class="ht" style="width:105px">Imp. Cub.</th>
-        <th class="hr" style="width:110px">Imp. NoCub.</th>
-      </tr></thead>
+      ${TABLA_HEAD}
       <tbody>
         ${[...g2.faltC,...g2.sobrC,...g2.neutC].map(renderRow).join('')}
         ${renderSubtotalRF2(g2)}
@@ -663,16 +952,16 @@ function renderRow(r){
   const rf2=getRF2(r);
   return`<tr class="${cls}">
     <td><b>${r['Codigo de Material']||''}</b></td>
-    <td style="font-size:11px">${r['Descripcion del Material']||''}</td>
-    <td class="r cg">${r['Medidas']||'—'}</td>
+    <td style="font-size:11px">${r['Descripcion del Material']||''}${r._porSimilitud?' <span title="Compensado cruzando por similitud de descripción (no coincide RF2/código)" style="background:#fff3cd;color:#8a6d1d;font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;margin-left:4px">🔗 SIMIL.</span>':''}</td>
+    <td class="r cg">${getMedida(r)||'—'}</td>
     <td style="text-align:center"><span style="background:#1e3a5f22;color:#1e3a5f;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${rf2}</span></td>
     <td style="text-align:center"><span style="background:#1e3a5f;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700">${d4}</span></td>
     <td class="${isF?'tf':isS?'ts':'cg'}">${isF?'FALTANTE':isS?'SOBRANTE':'—'}</td>
     <td class="${dc} r">${isF?'':'+'}${fmtQ(r._dq)}</td>
     <td class="${dc} r">${r._dv<0?'-$':'$'}${Math.abs(r._dv).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
     <td class="r" style="color:#555">$${r._vu.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',')}</td>
-    <td class="r cb2">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
-    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
+    <td class="r cb2" title="${(pctCobertura(r)*100).toFixed(0)}% cubierto">${r.cantCub>0.001?fmtQ(r.cantCub):'—'}</td>
+    <td class="r ${r.cantNoCub>0.001?'cr2':'cg'}" title="${(pctCobertura(r)*100).toFixed(0)}% cubierto · min. ${Math.round(COBERTURA_MIN*100)}%">${r.cantNoCub>0.001?fmtQ(r.cantNoCub):'0'}</td>
     <td class="r cb2">${r.impCub>0.005?'$'+r.impCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'—'}</td>
     <td class="r ${r.impNoCub>0.005?'cr2':'cg'}">${r.impNoCub>0.005?'$'+r.impNoCub.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','):'$0.00'}</td>
   </tr>`;
@@ -758,6 +1047,20 @@ function reiniciar(){
 // ── EXCEL EXPORT ──
 function exportarExcel(){
   const wb=XLSX.utils.book_new();
+  // ── Bordes tipo cuadrícula para toda la hoja con datos ──
+  function addGridBorders(ws){
+    if(!ws['!ref'])return;
+    const range=XLSX.utils.decode_range(ws['!ref']);
+    const thin={style:'thin',color:{rgb:'FFC9D2E8'}};
+    for(let r=range.s.r;r<=range.e.r;r++){
+      for(let c=range.s.c;c<=range.e.c;c++){
+        const addr=XLSX.utils.encode_cell({r,c});
+        if(!ws[addr])ws[addr]={t:'z',v:''};
+        ws[addr].s=ws[addr].s||{};
+        ws[addr].s.border={top:thin,bottom:thin,left:thin,right:thin};
+      }
+    }
+  }
   const C={
     n0hdr:'FFB8C4DE',n1hdr:'FFD4DAF0',n2hdr:'FFE4EAF7',
     faltBg:'FFFDE8E8',sobrBg:'FFEDFAF2',neutBg:'FFFAFBFD',
@@ -816,8 +1119,8 @@ function exportarExcel(){
             const bg=isF?C.faltBg:isS?C.sobrBg:C.neutBg;
             const tc=isF?C.textRed:isS?C.textBlue:C.textGray;
             push([
-              r['Codigo de Material']||'',r['Descripcion del Material']||'',
-              r['Medidas']||'',getRF2(r),getDesc4(r),
+              r['Codigo de Material']||'',(r['Descripcion del Material']||'')+(r._porSimilitud?' [SIMIL.]':''),
+              getMedida(r)||'',getRF2(r),getDesc4(r),
               isF?'FALTANTE':isS?'SOBRANTE':'—',
               r._dq,r._dv,r._vu,r.cantCub||0,r.cantNoCub||0,r.impCub||0,r.impNoCub||0
             ],[
@@ -882,6 +1185,7 @@ function exportarExcel(){
         ws[addr].s=s;
       });
     });
+    addGridBorders(ws);
     XLSX.utils.book_append_sheet(wb,ws,centro.substring(0,31));
   });
 
@@ -903,6 +1207,12 @@ function exportarExcel(){
   });
   const wsR=XLSX.utils.aoa_to_sheet(res);
   wsR['!cols']=[6,8,22,10,7,6,9,10,10,10,14,14,14,14,12].map(w=>({wch:w}));
+  res[0].forEach((_,ci)=>{
+    const addr=XLSX.utils.encode_cell({r:0,c:ci});
+    if(!wsR[addr])wsR[addr]={t:'z',v:''};
+    wsR[addr].s={fill:{patternType:'solid',fgColor:{rgb:C.dkHdr}},font:{bold:true,color:{rgb:C.white},name:'Arial',sz:9},alignment:{horizontal:ci>=6?'right':'left',vertical:'center'}};
+  });
+  addGridBorders(wsR);
   XLSX.utils.book_append_sheet(wb,wsR,'RESUMEN');
 
   // ── Hoja: Con Compensación ──
@@ -930,7 +1240,7 @@ function exportarExcel(){
       const tc=isF?C.textRed:isS?C.textBlue:C.textGray;
       push2([
         centro,fam.desc4,fam.rf1words.join(' · '),g1.rf1,g1.med||'',g2.rf2,
-        r['Codigo de Material']||'',r['Descripcion del Material']||'',
+        r['Codigo de Material']||'',(r['Descripcion del Material']||'')+(r._porSimilitud?' [SIMIL.]':''),
         isF?'FALTANTE':isS?'SOBRANTE':'—',
         r._dq,r._dv,r._vu,r.cantCub||0,r.cantNoCub||0,r.impCub||0,r.impNoCub||0,
         eL[g2.estado]||g2.estado
@@ -963,6 +1273,7 @@ function exportarExcel(){
         ws2[addr].s=st;
       });
     });
+    addGridBorders(ws2);
     return ws2;
   };
 
